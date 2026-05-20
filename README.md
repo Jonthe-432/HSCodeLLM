@@ -173,6 +173,39 @@ All configuration is via environment variables. **No secret is ever read from a 
 
 The LLM never sees the full nomenclature at once — only the relevant subset for the current level. This keeps prompts small, focused, and cheap.
 
+### The multi-step narrowing pyramid
+
+At each level the LLM is shown **only the codes that exist under the choice it just made**. Each turn shrinks the search space by roughly an order of magnitude, until only a handful of 8-digit candidates remain. Numbers below are from the live EU CN 2026 nomenclature.
+
+```
+                       ┌───────────────────────────────────┐
+   The full EU CN tree │            12 680 codes           │
+                       │  (2 / 4 / 6 / 8-digit, all levels)│
+                       └───────────────────────────────────┘
+
+Turn 1 — Chapter (2-digit)             ───────────────────────────────────
+  Show ALL 97 chapters, ask for one.   ███████████████████████████  97
+  "Headphones → 85: Electrical machinery."
+
+Turn 2 — Heading (4-digit) under 85    ───────────────────────────────────
+  Filter to children of 85: 45 left.   █████████████  45
+  "Headphones → 8518: Microphones, loudspeakers, headphones …"
+
+Turn 3 — Subheading (6-digit) under 8518 ─────────────────────────────────
+  Children of 8518: 8 subheadings.*    ███  8
+  "Headphones → 851830: Headphones and earphones."
+
+Turn 4 — CN code (8-digit) under 851830 ──────────────────────────────────
+  Children of 851830: 1 option.        █  1
+  "Headphones → 85183000 (final)."
+```
+
+*\*Heading 8518 is one of the ~317 "flat" headings where the SPARQL source emits no level-6 rows. The retriever synthesises them from the 8-digit prefixes so the pyramid still narrows at level 6 instead of jumping straight from 45 → 9. See [`CNCodeRetriever.get_subheadings()`](src/hscode/cn_retriever.py).*
+
+Across the full headphones walk the LLM sees **97 + 45 + 8 + 1 = 151 candidate codes** in total — never the full 12 680. Each prompt stays short, focused, and cheap, while the conversation history accumulating across turns gives the model coherent memory of its own choices (so a backtrack at level 3 doesn't reset what it learned at level 1).
+
+The same shape applies to every walk; the absolute numbers differ depending on which chapter you land in (chapter 84 — machinery — has 90 headings; chapter 99 — special use — has just 6).
+
 ## Using a custom LLM
 
 Any LangChain `BaseChatModel` will work — anything that supports
