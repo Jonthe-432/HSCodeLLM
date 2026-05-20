@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.Python
+build/
+dist/
+.eggs/
+.venv/
+venv/
+env/
+
+# Testing & tooling caches
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Cache (CN data, can be regenerated)
+.cache/
+cache/
+*.csv.cache
+
+# Logs
+*.log
+logs/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+*.pem
+*.key

@@ -1,0 +1,90 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hscode"
+version = "0.1.0"
+description = "Model-agnostic EU HS / Combined Nomenclature code classifier"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "HSCode Contributors" }]
+keywords = ["hs", "hs-code", "cn", "intrastat", "tariff", "classification", "llm"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Office/Business :: Financial",
+]
+dependencies = [
+    "requests>=2.31",
+    "pandas>=2.0",
+    "pydantic>=2.0",
+    "tenacity>=8.2",
+]
+
+[project.optional-dependencies]
+openai     = ["openai>=1.40"]
+azure      = ["openai>=1.40"]
+openrouter = ["openai>=1.40"]
+anthropic  = ["anthropic>=0.40"]
+google     = ["google-genai>=1.0"]
+ollama     = ["ollama>=0.3"]
+all = [
+    "openai>=1.40",
+    "anthropic>=0.40",
+    "google-genai>=1.0",
+    "ollama>=0.3",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "pytest-mock>=3.10",
+    "mypy>=1.5",
+    "ruff>=0.4",
+    "responses>=0.24",
+]
+
+[project.scripts]
+hscode = "hscode.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/example/hscode"
+Issues   = "https://github.com/example/hscode/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+hscode = ["py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+# Pragmatic ruleset — pyflakes, errors, imports + a few common-sense checks.
+select = ["E", "F", "I", "B"]
+ignore = [
+    "E501",  # Long lines are fine when readable
+    "B008",  # Function calls in defaults are intentional here
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests are allowed to access private attrs on objects under test.
+"tests/**" = ["B011", "F401"]
+
+[tool.mypy]
+python_version = "3.9"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
