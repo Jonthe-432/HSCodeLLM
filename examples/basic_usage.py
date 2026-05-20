@@ -7,13 +7,12 @@ Run with:
 
 from __future__ import annotations
 
-from hscode import HSCodeClassifier, classify
-from hscode.providers import get_provider
+from hscode import HSCodeClassifier, classify, get_chat_model
 
 
 def main() -> None:
     # ------------------------------------------------------------------
-    # 1. One-shot classification (builds a provider from env vars).
+    # 1. One-shot classification (builds a chat model from env vars).
     # ------------------------------------------------------------------
     result = classify(
         "Wireless bluetooth headphones with active noise cancelling",
@@ -22,12 +21,16 @@ def main() -> None:
     )
     print(f"{result.hs_code}  ({result.confidence:.0%})  {result.description}")
     if result.supplementary_unit:
-        print(f"  Supplementary unit: {result.supplementary_unit} ({result.supplementary_unit_description})")
+        print(
+            f"  Supplementary unit: {result.supplementary_unit} "
+            f"({result.supplementary_unit_description})"
+        )
 
     # ------------------------------------------------------------------
-    # 2. Reusing one classifier (and one LLM client) for many items.
+    # 2. Reusing one classifier (and one LangChain chat model) for many items.
     # ------------------------------------------------------------------
-    classifier = HSCodeClassifier(provider=get_provider())
+    llm = get_chat_model()
+    classifier = HSCodeClassifier(llm=llm)
 
     products = [
         "Cotton T-shirt, white, men's",

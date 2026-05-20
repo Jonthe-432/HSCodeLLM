@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hscode"
-version = "0.1.0"
-description = "Model-agnostic EU HS / Combined Nomenclature code classifier"
+version = "0.2.0"
+description = "Model-agnostic EU HS / Combined Nomenclature code classifier (LangChain-powered)"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "HSCode Contributors" }]
-keywords = ["hs", "hs-code", "cn", "intrastat", "tariff", "classification", "llm"]
+keywords = ["hs", "hs-code", "cn", "intrastat", "tariff", "classification", "llm", "langchain"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
@@ -25,21 +25,26 @@ dependencies = [
     "requests>=2.31",
     "pandas>=2.0",
     "pydantic>=2.0",
-    "tenacity>=8.2",
+    # LangChain core is required for the model-agnostic chat / structured-output API.
+    "langchain>=0.3",
+    "langchain-core>=0.3",
 ]
 
 [project.optional-dependencies]
-openai     = ["openai>=1.40"]
-azure      = ["openai>=1.40"]
-openrouter = ["openai>=1.40"]
-anthropic  = ["anthropic>=0.40"]
-google     = ["google-genai>=1.0"]
-ollama     = ["ollama>=0.3"]
+# Each extra installs the integration package LangChain needs to talk to that provider.
+# Use a combined "all" extra to get everything in one go.
+openai     = ["langchain-openai>=0.2"]
+azure      = ["langchain-openai>=0.2"]
+openrouter = ["langchain-openrouter>=0.2"]   # provides the ChatOpenRouter integration
+anthropic  = ["langchain-anthropic>=0.2"]
+google     = ["langchain-google-genai>=2.0"]
+ollama     = ["langchain-ollama>=0.2"]
 all = [
-    "openai>=1.40",
-    "anthropic>=0.40",
-    "google-genai>=1.0",
-    "ollama>=0.3",
+    "langchain-openai>=0.2",
+    "langchain-openrouter>=0.2",
+    "langchain-anthropic>=0.2",
+    "langchain-google-genai>=2.0",
+    "langchain-ollama>=0.2",
 ]
 dev = [
     "pytest>=7.0",
@@ -54,8 +59,8 @@ dev = [
 hscode = "hscode.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/example/hscode"
-Issues   = "https://github.com/example/hscode/issues"
+Homepage = "https://github.com/Jonthe-432/HSCodeLLM"
+Issues   = "https://github.com/Jonthe-432/HSCodeLLM/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -72,15 +77,13 @@ line-length = 100
 target-version = "py39"
 
 [tool.ruff.lint]
-# Pragmatic ruleset — pyflakes, errors, imports + a few common-sense checks.
 select = ["E", "F", "I", "B"]
 ignore = [
-    "E501",  # Long lines are fine when readable
-    "B008",  # Function calls in defaults are intentional here
+    "E501",
+    "B008",
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# Tests are allowed to access private attrs on objects under test.
 "tests/**" = ["B011", "F401"]
 
 [tool.mypy]

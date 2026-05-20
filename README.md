@@ -6,14 +6,15 @@ Given a free-text product description, the library returns the most appropriate 
 
 ## Key features
 
-- **Model agnostic** — works with OpenAI, Azure OpenAI, Anthropic, Google Gemini, Ollama (local), OpenRouter (hundreds of models behind one API), or any custom LLM by implementing a simple interface.
-- **Hierarchical classification with backtracking** — traverses the official HS tree (Chapter → Heading → Subheading → CN code) and backtracks if an LLM detects a wrong turn upstream.
-- **Always-fresh nomenclature** — fetches CN codes directly from the EU Publications Office [SPARQL endpoint](https://op.europa.eu/en/web/eu-vocabularies). Cached locally per year+month to avoid repeated API calls.
+- **LangChain under the hood** — every provider (OpenAI, Azure OpenAI, Anthropic, Google Gemini, Ollama, OpenRouter) is a LangChain `BaseChatModel`. Swapping the model is a one-line change; no provider-specific glue lives in this codebase.
+- **Conversational classification** — the entire hierarchical walk (Chapter → Heading → Subheading → CN code) happens inside one ongoing chat, so the model remembers its own prior choices and reasoning. This dramatically reduces the "model keeps re-picking the wrong chapter" failure mode.
+- **Hierarchical traversal with backtracking** — at any level the model can say `BACKTRACK` and the classifier rewinds, while preserving conversation history.
+- **Always-fresh nomenclature** — fetches CN codes directly from the EU Publications Office [SPARQL endpoint](https://op.europa.eu/en/web/eu-vocabularies). Cached locally per year+month.
+- **Robust to flat headings** — ~33% of EU CN headings have no level-6 subheading rows in the SPARQL data. The retriever synthesises them from level-8 prefixes so the conversation can still narrow down.
 - **Regex fast-path** — if the description already contains a valid 8-digit code (`"... CN 39269097 ..."`), it's extracted and validated without any LLM call.
 - **Validated output** — every returned code is validated against the official EU CN database.
 - **Supplementary unit lookup** — automatically attaches the statistical unit (pieces, m², litres …) for Intrastat reporting.
 - **No secrets in code** — all credentials come from environment variables.
-- **Production-ready** — retries with exponential backoff, structured logging, typed result objects, full test suite, Dockerfile.
 
 ## Installation
 
@@ -21,15 +22,15 @@ Given a free-text product description, the library returns the most appropriate 
 pip install -e .
 ```
 
-Or with a specific provider:
+Pick one or more provider extras:
 
 ```bash
-pip install -e ".[openai]"      # OpenAI
-pip install -e ".[azure]"       # Azure OpenAI
-pip install -e ".[openrouter]"  # OpenRouter (uses the OpenAI SDK)
-pip install -e ".[anthropic]"   # Anthropic Claude
-pip install -e ".[google]"      # Google Gemini
-pip install -e ".[ollama]"      # Local Ollama
+pip install -e ".[openai]"      # OpenAI (langchain-openai)
+pip install -e ".[azure]"       # Azure OpenAI (langchain-openai)
+pip install -e ".[openrouter]"  # OpenRouter (langchain-openrouter)
+pip install -e ".[anthropic]"   # Anthropic Claude (langchain-anthropic)
+pip install -e ".[google]"      # Google Gemini (langchain-google-genai)
+pip install -e ".[ollama]"      # Local Ollama (langchain-ollama)
 pip install -e ".[all]"         # Everything
 ```
 
@@ -46,8 +47,8 @@ result = classify(
 
 print(result.hs_code)           # "85183000"
 print(result.description)       # "Headphones and earphones, ..."
-print(result.confidence)        # 0.92
-print(result.supplementary_unit)# "PST"
+print(result.confidence)        # 0.93
+print(result.supplementary_unit)# "NO_SU"
 print(result.reasoning)         # full chain-of-thought
 ```
 
@@ -60,14 +61,25 @@ export OPENAI_API_KEY=sk-...
 ### Using the classifier directly (re-use the LLM client)
 
 ```python
-from hscode import HSCodeClassifier
-from hscode.providers import OpenAIProvider
+from hscode import HSCodeClassifier, get_chat_model
 
-classifier = HSCodeClassifier(provider=OpenAIProvider(model="gpt-5.4-nano"))
+llm = get_chat_model(provider="openai", model="gpt-5.4-nano")
+classifier = HSCodeClassifier(llm=llm)
 
 for desc in ["Cotton T-shirt", "Steel screws M6", "Lithium-ion battery 18650"]:
     result = classifier.classify(desc)
     print(f"{desc:<45} -> {result.hs_code} ({result.confidence:.0%})")
+```
+
+You can also pass any LangChain `BaseChatModel` directly:
+
+```python
+from langchain.chat_models import init_chat_model
+from hscode import HSCodeClassifier
+
+llm = init_chat_model("openrouter:anthropic/claude-haiku-4.5", temperature=0.0)
+classifier = HSCodeClassifier(llm=llm)
+result = classifier.classify("Wireless bluetooth headphones")
 ```
 
 ### CLI
@@ -90,7 +102,7 @@ export OPENROUTER_API_KEY=sk-or-...
 # Use any vendor/model slug supported by OpenRouter:
 hscode "Lithium-ion battery 18650" \
     --provider openrouter \
-    --model anthropic/claude-sonnet-4.5
+    --model anthropic/claude-haiku-4.5
 
 # Discover models that support structured (schema-constrained) output:
 hscode --list-openrouter-models
@@ -99,14 +111,14 @@ hscode --list-openrouter-models
 Programmatic discovery:
 
 ```python
-from hscode.providers.openrouter_provider import OpenRouterProvider
+from hscode.openrouter import list_models
 
 # Full live catalogue (357+ models at the time of writing):
-all_models = OpenRouterProvider.list_models()
+all_models = list_models()
 
 # Only the ~280 models that support response_format / structured_outputs
 # (recommended for HSCode, which relies on JSON-schema-constrained output):
-suitable = OpenRouterProvider.list_models(structured_only=True)
+suitable = list_models(structured_only=True)
 
 for m in suitable[:5]:
     print(m["id"], m.get("context_length"), m["pricing"])
@@ -130,7 +142,6 @@ All configuration is via environment variables. **No secret is ever read from a 
 | `GOOGLE_API_KEY` | For Google Gemini |
 | `OLLAMA_HOST` | For local Ollama (default: `http://localhost:11434`) |
 | `OPENROUTER_API_KEY` | For OpenRouter (use a fully-qualified model slug like `openai/gpt-5.4-nano` or `anthropic/claude-haiku-4.5`) |
-| `OPENROUTER_HTTP_REFERER` / `OPENROUTER_APP_TITLE` | Optional ranking headers for openrouter.ai/rankings |
 
 ## Architecture
 
@@ -146,8 +157,11 @@ All configuration is via environment variables. **No secret is ever read from a 
                               │ (miss)
                               ▼
 ┌────────────────────────────────────────────────────────────┐
-│  2. Hierarchical LLM classification with backtracking      │
+│  2. Conversational hierarchical classification             │
+│     (one chat, one LangChain BaseChatModel)                │
 │     Chapter (2) → Heading (4) → Subheading (6) → CN (8)    │
+│     Model can BACKTRACK at any level; conversation history │
+│     is preserved across the whole walk.                    │
 └────────────────────────────────────────────────────────────┘
                               │
                               ▼
@@ -159,29 +173,21 @@ All configuration is via environment variables. **No secret is ever read from a 
 
 The LLM never sees the full nomenclature at once — only the relevant subset for the current level. This keeps prompts small, focused, and cheap.
 
-## Adding a custom LLM provider
+## Using a custom LLM
 
-Implement a single method:
-
-```python
-from hscode.providers import LLMProvider, StructuredOutput
-
-class MyProvider(LLMProvider):
-    def generate_structured(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        schema: type[StructuredOutput],
-    ) -> StructuredOutput:
-        # Call your model and return an instance of `schema`
-        ...
-```
-
-Pass it directly to the classifier:
+Any LangChain `BaseChatModel` will work — anything that supports
+`with_structured_output(PydanticSchema)`:
 
 ```python
-HSCodeClassifier(provider=MyProvider())
+from langchain_openai import ChatOpenAI       # or any other langchain-* package
+from hscode import HSCodeClassifier
+
+llm = ChatOpenAI(model="gpt-5.4-nano", temperature=0.0)
+classifier = HSCodeClassifier(llm=llm)
+result = classifier.classify("Stainless steel kitchen knife")
 ```
+
+For a list of officially-supported chat models see https://docs.langchain.com/oss/python/integrations/chat/.
 
 ## Testing
 
@@ -189,6 +195,8 @@ HSCodeClassifier(provider=MyProvider())
 pip install -e ".[dev]"
 pytest
 ```
+
+Tests use a scripted LangChain chat model (`tests/conftest.py::ScriptedChatModel`) — no network calls, no API keys needed.
 
 ## Docker
 

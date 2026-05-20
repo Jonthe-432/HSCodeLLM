@@ -9,6 +9,7 @@ Examples
     hscode "Cotton T-shirt" --provider anthropic --model claude-haiku-4.5
     hscode "Steel screws M6 zinc plated" --json
     hscode --preload-cache
+    hscode --list-openrouter-models
 """
 
 from __future__ import annotations
@@ -21,8 +22,8 @@ from typing import List, Optional
 from hscode import __version__
 from hscode.api import classify
 from hscode.cn_retriever import preload_cn_data
+from hscode.llm import list_providers
 from hscode.logging_config import configure_logging, get_logger
-from hscode.providers import list_providers
 
 logger = get_logger("cli")
 
@@ -38,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "description",
         nargs="?",
-        help="Product description to classify (omit when using --preload-cache).",
+        help="Product description to classify (omit when using --preload-cache or --list-openrouter-models).",
     )
     parser.add_argument(
         "--provider",
@@ -47,7 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--model",
-        help="Model name passed to the provider (default: $HSCODE_MODEL).",
+        help="Model slug passed to the provider (default: $HSCODE_MODEL).",
     )
     parser.add_argument(
         "--temperature",
@@ -112,7 +113,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _print_openrouter_models(as_json=args.json)
 
     if not args.description:
-        parser.error("description is required (or use --preload-cache)")
+        parser.error("description is required (or use --preload-cache / --list-openrouter-models)")
 
     extra_kwargs = {}
     if args.temperature is not None:
@@ -144,14 +145,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 def _print_openrouter_models(as_json: bool = False) -> int:
     """Print the OpenRouter model catalogue (structured-output capable)."""
     try:
-        from hscode.providers.openrouter_provider import OpenRouterProvider
-    except ImportError as exc:
-        print(f"OpenRouter provider unavailable: {exc}", file=sys.stderr)
+        from hscode.openrouter import list_models, OpenRouterError
+    except ImportError as exc:  # pragma: no cover
+        print(f"OpenRouter helper unavailable: {exc}", file=sys.stderr)
         return 2
 
     try:
-        models = OpenRouterProvider.list_models(structured_only=True)
-    except Exception as exc:
+        models = list_models(structured_only=True)
+    except OpenRouterError as exc:
         print(f"Could not fetch OpenRouter models: {exc}", file=sys.stderr)
         return 2
 

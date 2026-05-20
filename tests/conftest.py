@@ -7,13 +7,17 @@ fixture provides an isolated, in-memory replacement.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import List, Tuple, Type
+from typing import List, Sequence, Type
 
 import pandas as pd
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
+from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.runnables import Runnable, RunnableLambda
+from pydantic import BaseModel
 
 from hscode.cn_retriever import CNCodeRetriever
-from hscode.providers.base import LLMProvider, StructuredOutput
 
 # ---------------------------------------------------------------------------
 # Tiny synthetic CN nomenclature for tests
@@ -71,37 +75,73 @@ def cn_retriever(synthetic_cn_df: pd.DataFrame, tmp_path: Path) -> CNCodeRetriev
 
 
 # ---------------------------------------------------------------------------
-# Scripted LLM provider — returns canned responses in order
+# Scripted LangChain chat model — returns canned Pydantic objects in order
 # ---------------------------------------------------------------------------
 
 
-class ScriptedProvider(LLMProvider):
-    """A test double LLMProvider that returns canned objects in order.
+class ScriptedChatModel(FakeListChatModel):
+    """A LangChain BaseChatModel test double that returns canned structured outputs.
 
-    Each item in ``responses`` must be a Pydantic model instance matching
-    the expected schema for that call.
+    ``with_structured_output(schema)`` is overridden to return a runnable
+    that pops the next canned ``BaseModel`` instance from ``structured_responses``
+    on each ``invoke``. The conversation history passed to ``invoke`` is
+    captured in ``calls`` so tests can assert on it.
+
+    The plain ``invoke()`` path (no structured output) falls back to the
+    parent ``FakeListChatModel`` behaviour using ``string_responses``.
     """
 
-    name = "scripted"
+    structured_responses: List[BaseModel] = []
+    calls: List[List[BaseMessage]] = []
 
-    def __init__(self, responses: List[StructuredOutput]) -> None:  # type: ignore[type-var]
-        super().__init__(model="scripted")
-        self.responses = list(responses)
-        self.calls: List[Tuple[str, str, Type[StructuredOutput]]] = []
+    @classmethod
+    def script(
+        cls,
+        structured_responses: Sequence[BaseModel],
+        string_responses: Sequence[str] = (),
+    ) -> "ScriptedChatModel":
+        """Construct a scripted model with canned structured replies."""
+        # FakeListChatModel needs at least one string response to be valid.
+        responses = list(string_responses) or ["unused"]
+        instance = cls(responses=responses)
+        # Pydantic v2 / langchain BaseModel: assign via __dict__ to skip
+        # frozen-field protection while still keeping the same instance.
+        object.__setattr__(instance, "structured_responses", list(structured_responses))
+        object.__setattr__(instance, "calls", [])
+        return instance
 
-    def _call(self, system_prompt: str, user_prompt: str, schema):  # type: ignore[override]
-        self.calls.append((system_prompt, user_prompt, schema))
-        if not self.responses:
-            raise AssertionError("ScriptedProvider ran out of canned responses")
-        nxt = self.responses.pop(0)
-        if not isinstance(nxt, schema):
-            raise AssertionError(
-                f"Scripted response type mismatch: expected {schema.__name__}, got {type(nxt).__name__}"
-            )
-        return nxt
+    def with_structured_output(  # type: ignore[override]
+        self,
+        schema: Type[BaseModel],
+        *,
+        include_raw: bool = False,
+        **kwargs,
+    ) -> Runnable:
+        captured_self = self
+
+        def _runner(messages):
+            # Normalise: invoke can receive a string, a single message, or a list.
+            if isinstance(messages, list):
+                history = list(messages)
+            else:
+                history = [messages]
+            captured_self.calls.append(history)
+            if not captured_self.structured_responses:
+                raise AssertionError(
+                    "ScriptedChatModel ran out of canned structured responses"
+                )
+            nxt = captured_self.structured_responses.pop(0)
+            if not isinstance(nxt, schema):
+                raise AssertionError(
+                    f"Scripted response type mismatch: expected {schema.__name__}, "
+                    f"got {type(nxt).__name__}"
+                )
+            return nxt
+
+        return RunnableLambda(_runner)
 
 
 @pytest.fixture
-def scripted_provider_factory():
-    """Returns a callable that builds a ScriptedProvider from a list of responses."""
-    return ScriptedProvider
+def scripted_chat_model_factory():
+    """Returns a callable that builds a ScriptedChatModel from a list of responses."""
+    return ScriptedChatModel.script

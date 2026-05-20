@@ -338,8 +338,50 @@ class CNCodeRetriever:
         return [(c, d) for c, d in self._level_rows(4) if c.startswith(chapter)]
 
     def get_subheadings(self, heading: str) -> List[Tuple[str, str]]:
+        """Return level-6 subheadings under ``heading``.
+
+        Roughly a third of EU CN headings (≈317 of ~957 in 2026) have a
+        flat structure: the SPARQL endpoint emits no level-6 rows at all,
+        only a level-4 heading and its level-8 codes. For those headings
+        we synthesise level-6 entries from the distinct 6-digit prefixes
+        of the level-8 children, so the hierarchical classifier can still
+        narrow down before picking the final code.
+        """
         heading = heading.strip()
-        return [(c, d) for c, d in self._level_rows(6) if c.startswith(heading)]
+        explicit = [(c, d) for c, d in self._level_rows(6) if c.startswith(heading)]
+        if explicit:
+            return explicit
+
+        # Synthesise from 8-digit children.
+        children = self.get_cn_codes(heading)
+        if not children:
+            return []
+
+        # Group level-8 codes by their first 6 digits.
+        groups: Dict[str, List[Tuple[str, str]]] = {}
+        for code, desc in children:
+            if len(code) >= 6:
+                groups.setdefault(code[:6], []).append((code, desc))
+
+        synthesised: List[Tuple[str, str]] = []
+        for prefix in sorted(groups):
+            members = groups[prefix]
+            # Heuristic description: if there is exactly one 8-digit child
+            # under this prefix, reuse its description; otherwise produce a
+            # short summary listing the first few children. This keeps the
+            # LLM prompt informative without leaking the entire option set
+            # twice.
+            if len(members) == 1:
+                desc = members[0][1] or f"Subheading {prefix}"
+            else:
+                sample = "; ".join(d for _, d in members[:3] if d)
+                desc = (
+                    f"Subheading {prefix} (covers {len(members)} 8-digit codes"
+                    + (f": {sample}" if sample else "")
+                    + ")"
+                )
+            synthesised.append((prefix, desc))
+        return synthesised
 
     def get_cn_codes(self, subheading: str) -> List[Tuple[str, str]]:
         subheading = subheading.strip()

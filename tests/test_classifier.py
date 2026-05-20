@@ -1,4 +1,4 @@
-"""End-to-end tests for the classifier — using a scripted LLM provider."""
+"""End-to-end tests for the classifier — using a scripted LangChain chat model."""
 
 from __future__ import annotations
 
@@ -8,10 +8,11 @@ from hscode.classifier import HSCodeClassifier
 from hscode.models import CommodityCode, HSCodeLevel
 
 
-def test_regex_fastpath_skips_llm(cn_retriever, scripted_provider_factory) -> None:
+def test_regex_fastpath_skips_llm(cn_retriever, scripted_chat_model_factory) -> None:
     """If a valid CN code is embedded in the description, the LLM is not called."""
-    provider = scripted_provider_factory([])  # zero canned answers; calling the LLM would fail
-    classifier = HSCodeClassifier(provider=provider, retriever=cn_retriever)
+    # Zero canned answers; calling the LLM would raise.
+    llm = scripted_chat_model_factory([])
+    classifier = HSCodeClassifier(llm=llm, retriever=cn_retriever)
 
     result = classifier.classify("Headphones, commodity code: 85183000")
 
@@ -19,21 +20,21 @@ def test_regex_fastpath_skips_llm(cn_retriever, scripted_provider_factory) -> No
     assert result.status == "regex_extracted"
     assert result.validated is True
     assert result.supplementary_unit == "PST"
-    assert provider.calls == []  # no LLM calls were made
+    assert llm.calls == []  # no LLM calls were made
     assert result.cn_year == 2026
 
 
-def test_unclear_description_skipped(cn_retriever, scripted_provider_factory) -> None:
-    provider = scripted_provider_factory([])
-    classifier = HSCodeClassifier(provider=provider, retriever=cn_retriever)
+def test_unclear_description_skipped(cn_retriever, scripted_chat_model_factory) -> None:
+    llm = scripted_chat_model_factory([])
+    classifier = HSCodeClassifier(llm=llm, retriever=cn_retriever)
 
     result = classifier.classify("12345")
     assert result.status == "description_unclear"
     assert result.hs_code == "N/A"
-    assert provider.calls == []
+    assert llm.calls == []
 
 
-def test_full_hierarchical_classification(cn_retriever, scripted_provider_factory) -> None:
+def test_full_hierarchical_classification(cn_retriever, scripted_chat_model_factory) -> None:
     """Headphones description traverses 85 → 8518 → 851830 → 85183000."""
     responses = [
         HSCodeLevel(code="85", description="Electrical machinery and equipment",
@@ -47,8 +48,8 @@ def test_full_hierarchical_classification(cn_retriever, scripted_provider_factor
                       confidence=0.93,
                       reasoning="Best match for the product"),
     ]
-    provider = scripted_provider_factory(responses)
-    classifier = HSCodeClassifier(provider=provider, retriever=cn_retriever, max_retries=3)
+    llm = scripted_chat_model_factory(responses)
+    classifier = HSCodeClassifier(llm=llm, retriever=cn_retriever, max_retries=3)
 
     result = classifier.classify("Wireless bluetooth headphones with ANC")
 
@@ -60,11 +61,43 @@ def test_full_hierarchical_classification(cn_retriever, scripted_provider_factor
     assert result.subheading == "851830"
     assert result.confidence == pytest.approx(0.93)
     assert result.supplementary_unit == "PST"
-    assert len(provider.calls) == 4
+    assert len(llm.calls) == 4
     assert "Headphones" in result.reasoning
 
 
-def test_backtracking_at_heading_level(cn_retriever, scripted_provider_factory) -> None:
+def test_conversation_history_grows_across_turns(
+    cn_retriever, scripted_chat_model_factory
+) -> None:
+    """Each turn must receive ALL prior messages, not just the latest prompt.
+
+    This is the property that distinguishes the LangChain rewrite from the
+    old stateless per-call design.
+    """
+    responses = [
+        HSCodeLevel(code="85", description="Electrical machinery", reasoning="ok"),
+        HSCodeLevel(code="8518", description="Headphones heading", reasoning="ok"),
+        HSCodeLevel(code="851830", description="Headphones subheading", reasoning="ok"),
+        CommodityCode(hs_code="85183000", description="Headphones",
+                      confidence=0.9, reasoning="ok"),
+    ]
+    llm = scripted_chat_model_factory(responses)
+    classifier = HSCodeClassifier(llm=llm, retriever=cn_retriever)
+
+    classifier.classify("Wireless bluetooth headphones with ANC")
+
+    # Each successive invoke MUST have a longer history than the previous one.
+    lengths = [len(history) for history in llm.calls]
+    assert lengths == sorted(lengths)
+    assert lengths[-1] > lengths[0]
+    # First turn must include the SystemMessage and the introductory HumanMessage.
+    first = llm.calls[0]
+    assert any(m.type == "system" for m in first)
+    # Final turn must include AI replies from earlier turns.
+    last = llm.calls[-1]
+    assert any(m.type == "ai" for m in last)
+
+
+def test_backtracking_at_heading_level(cn_retriever, scripted_chat_model_factory) -> None:
     """First attempt picks chapter 61 (wrong) → backtracks → picks 85."""
     responses = [
         # Attempt 1: wrong chapter 61
@@ -79,8 +112,8 @@ def test_backtracking_at_heading_level(cn_retriever, scripted_provider_factory) 
         CommodityCode(hs_code="85183000", description="Headphones",
                       confidence=0.9, reasoning="ok"),
     ]
-    provider = scripted_provider_factory(responses)
-    classifier = HSCodeClassifier(provider=provider, retriever=cn_retriever, max_retries=3)
+    llm = scripted_chat_model_factory(responses)
+    classifier = HSCodeClassifier(llm=llm, retriever=cn_retriever, max_retries=3)
 
     result = classifier.classify("Wireless bluetooth headphones")
 
@@ -89,7 +122,9 @@ def test_backtracking_at_heading_level(cn_retriever, scripted_provider_factory) 
     assert result.status == "ok"
 
 
-def test_classification_fails_after_max_retries(cn_retriever, scripted_provider_factory) -> None:
+def test_classification_fails_after_max_retries(
+    cn_retriever, scripted_chat_model_factory
+) -> None:
     """Every attempt requests backtrack → eventually we give up."""
     responses = []
     for _ in range(20):
@@ -100,8 +135,8 @@ def test_classification_fails_after_max_retries(cn_retriever, scripted_provider_
             HSCodeLevel(code="BACKTRACK", description="", reasoning="never satisfied",
                         backtrack_to_level=1)
         )
-    provider = scripted_provider_factory(responses)
-    classifier = HSCodeClassifier(provider=provider, retriever=cn_retriever, max_retries=3)
+    llm = scripted_chat_model_factory(responses)
+    classifier = HSCodeClassifier(llm=llm, retriever=cn_retriever, max_retries=3)
 
     result = classifier.classify("Some valid product description here")
     assert result.status == "classification_failed"
@@ -109,7 +144,9 @@ def test_classification_fails_after_max_retries(cn_retriever, scripted_provider_
     assert result.attempts == 3
 
 
-def test_invalid_cn_code_marked_unvalidated(cn_retriever, scripted_provider_factory) -> None:
+def test_invalid_cn_code_marked_unvalidated(
+    cn_retriever, scripted_chat_model_factory
+) -> None:
     """LLM returns an 8-digit code with the right prefix but not in our DB."""
     responses = [
         HSCodeLevel(code="85", description="Electrical machinery", reasoning="ok"),
@@ -118,8 +155,8 @@ def test_invalid_cn_code_marked_unvalidated(cn_retriever, scripted_provider_fact
         CommodityCode(hs_code="85183099", description="Made-up code",
                       confidence=0.5, reasoning="invented"),
     ]
-    provider = scripted_provider_factory(responses)
-    classifier = HSCodeClassifier(provider=provider, retriever=cn_retriever, max_retries=2)
+    llm = scripted_chat_model_factory(responses)
+    classifier = HSCodeClassifier(llm=llm, retriever=cn_retriever, max_retries=2)
 
     result = classifier.classify("Wireless bluetooth headphones")
     # 85183099 starts with subheading 851830 so prefix check passes,

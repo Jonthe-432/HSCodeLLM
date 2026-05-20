@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
+from langchain_core.language_models import BaseChatModel
+
 from hscode.classifier import HSCodeClassifier
+from hscode.llm import get_chat_model
 from hscode.models import ClassificationResult
-from hscode.providers import LLMProvider, get_provider
 
 
 def classify(
@@ -14,9 +16,9 @@ def classify(
     *,
     provider: Optional[str] = None,
     model: Optional[str] = None,
-    llm_provider: Optional[LLMProvider] = None,
+    llm: Optional[BaseChatModel] = None,
     max_retries: Optional[int] = None,
-    **provider_kwargs: Any,
+    **llm_kwargs: Any,
 ) -> ClassificationResult:
     """Classify a single product description into an 8-digit EU CN code.
 
@@ -27,21 +29,22 @@ def classify(
     Args:
         description: Free-text product description.
         provider: Provider name (``"openai"``, ``"azure"``, ``"anthropic"``,
-            ``"google"``, ``"ollama"``). Defaults to ``$HSCODE_PROVIDER`` or
-            ``"openai"``.
-        model: Model name passed to the provider. Defaults to
+            ``"google"``, ``"ollama"``, ``"openrouter"``). Defaults to
+            ``$HSCODE_PROVIDER`` or ``"openai"``.
+        model: Model slug passed to the provider. Defaults to
             ``$HSCODE_MODEL`` or a provider-specific default.
-        llm_provider: Pre-built :class:`LLMProvider` instance. Takes
-            precedence over ``provider``/``model``/``provider_kwargs``.
+        llm: Pre-built LangChain ``BaseChatModel``. Takes precedence over
+            ``provider``/``model``/``llm_kwargs``.
         max_retries: Maximum number of hierarchical passes.
-        **provider_kwargs: Extra keyword arguments forwarded to the
-            provider constructor (e.g. ``temperature``, ``base_url``).
+        **llm_kwargs: Extra keyword arguments forwarded to
+            :func:`hscode.llm.get_chat_model` (e.g. ``temperature``,
+            ``timeout``, ``max_tokens``).
 
     Returns:
         A :class:`ClassificationResult` describing the chosen CN code.
     """
-    if llm_provider is None:
-        llm_provider = get_provider(name=provider, model=model, **provider_kwargs)
+    if llm is None:
+        llm = get_chat_model(provider=provider, model=model, **llm_kwargs)
 
-    classifier = HSCodeClassifier(provider=llm_provider, max_retries=max_retries)
+    classifier = HSCodeClassifier(llm=llm, max_retries=max_retries)
     return classifier.classify(description)
