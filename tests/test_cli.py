@@ -69,3 +69,61 @@ def test_cli_error_handling(monkeypatch: pytest.MonkeyPatch, capsys) -> None:
 def test_cli_requires_description() -> None:
     with pytest.raises(SystemExit):
         cli_module.main([])
+
+
+# ---------------------------------------------------------------------------
+# .env auto-loader
+# ---------------------------------------------------------------------------
+
+
+def test_autoload_env_file_sets_missing_vars(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The auto-loader fills in vars not already in the environment."""
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "# a comment\n"
+        "FAKE_HSCODE_VAR=from_dotenv\n"
+        "QUOTED_VAR='quoted value'\n"
+        "DOUBLE_QUOTED=\"double quoted\"\n"
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("FAKE_HSCODE_VAR", raising=False)
+    monkeypatch.delenv("QUOTED_VAR", raising=False)
+    monkeypatch.delenv("DOUBLE_QUOTED", raising=False)
+
+    cli_module._autoload_env_file()
+
+    import os
+
+    assert os.environ["FAKE_HSCODE_VAR"] == "from_dotenv"
+    assert os.environ["QUOTED_VAR"] == "quoted value"
+    assert os.environ["DOUBLE_QUOTED"] == "double quoted"
+
+
+def test_autoload_env_file_does_not_override_existing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """Shell-set env vars always win over .env contents."""
+    env_file = tmp_path / ".env"
+    env_file.write_text("FAKE_HSCODE_VAR=from_dotenv\n")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("FAKE_HSCODE_VAR", "from_shell")
+
+    cli_module._autoload_env_file()
+
+    import os
+    assert os.environ["FAKE_HSCODE_VAR"] == "from_shell"
+
+
+def test_autoload_env_file_no_file_is_noop(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """If no .env exists, the loader silently does nothing."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("FAKE_HSCODE_VAR", raising=False)
+
+    cli_module._autoload_env_file()  # must not raise
+
+    import os
+    assert "FAKE_HSCODE_VAR" not in os.environ

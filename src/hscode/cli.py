@@ -10,13 +10,20 @@ Examples
     hscode "Steel screws M6 zinc plated" --json
     hscode --preload-cache
     hscode --list-openrouter-models
+
+For convenience, the CLI auto-loads a ``.env`` file from the current
+working directory (or the project root) if one exists, so secrets like
+``OPENROUTER_API_KEY`` can be kept out of your shell history. Variables
+already set in the shell always take precedence.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from pathlib import Path
 from typing import List, Optional
 
 from hscode import __version__
@@ -26,6 +33,48 @@ from hscode.llm import list_providers
 from hscode.logging_config import configure_logging, get_logger
 
 logger = get_logger("cli")
+
+
+def _autoload_env_file() -> None:
+    """Best-effort .env loader for CLI convenience.
+
+    Looks for a ``.env`` file in (a) the current working directory and
+    (b) the project root (two levels above this file), and copies any
+    ``KEY=value`` pairs into ``os.environ`` *without overriding* variables
+    that are already set. Silently does nothing if no file is found or
+    the file is malformed — env vars set in the shell always win.
+
+    This is intentionally a minimal in-tree parser so we don't depend on
+    ``python-dotenv``. Use a real dotenv library if you need quote
+    handling, multi-line values, or variable interpolation.
+    """
+    candidates = [Path.cwd() / ".env"]
+    project_root = Path(__file__).resolve().parent.parent.parent
+    candidates.append(project_root / ".env")
+
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.strip()
+                # Strip one matching pair of surrounding quotes if present.
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                    value = value[1:-1]
+                if key and key not in os.environ:
+                    os.environ[key] = value
+        except OSError:
+            # File became unreadable between is_file() and read_text() — ignore.
+            continue
+        # Only load the first .env we find, to avoid surprising merge behaviour.
+        return
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -96,6 +145,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # Auto-load .env BEFORE building the parser, so env-derived values
+    # are available everywhere downstream (config, providers, ...).
+    _autoload_env_file()
+
     parser = build_parser()
     args = parser.parse_args(argv)
 
